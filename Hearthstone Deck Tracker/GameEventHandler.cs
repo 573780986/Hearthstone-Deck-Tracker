@@ -514,6 +514,7 @@ namespace Hearthstone_Deck_Tracker
 				if(_game.IsBattlegroundsMatch)
 				{
 					_game.IsBattlegroundsCombatPhase = false;
+					_game.GameEntityTurnAtShoppingStart = _game.GameEntity?.GetTag(GameTag.TURN) ?? -1;
 					Core.Overlay.OnBattlegroundsShoppingStart();
 					_game.PrimaryPlayerId = _game.Player.Id;
 					OpponentDeadForTracker.ShoppingStarted(_game);
@@ -802,7 +803,7 @@ namespace Hearthstone_Deck_Tracker
 				if(_game.CurrentGameMode == Spectator && _game.CurrentGameStats.Result == GameResult.None)
 				{
 					Log.Info("Game was spectator mode without a game result. Probably exited spectator mode early.");
-					Sentry.ClearBattlegroundsEvents();
+					Sentry.DropBattlegroundsEvents("spectator_no_result");
 					return;
 				}
 				var player = _game.Entities.FirstOrDefault(e => e.Value?.IsPlayer ?? false).Value;
@@ -1072,12 +1073,7 @@ namespace Hearthstone_Deck_Tracker
 					Core.Game.BattlegroundsSessionViewModel.OnGameEnd();
 					Core.Windows.BattlegroundsSessionWindow.OnGameEnd();
 
-					if(LogContainsStateComplete)
-						Sentry.SendQueuedBattlegroundsEvents(_game.CurrentGameStats.HsReplay.UploadId);
-					else
-						if(!_game.IsBattlegroundsDuosMatch)
-							Sentry.SendQueuedBobsBuddyEventsStateCompleteFalse(_game.CurrentGameStats.HsReplay.UploadId);
-						Sentry.ClearBattlegroundsEvents();
+					Sentry.FlushBattlegroundsEvents(_game.CurrentGameStats.HsReplay.UploadId, LogContainsStateComplete, _game.IsBattlegroundsDuosMatch);
 					Tier7Trial.Clear();
 					var hero = _game.Entities.Values.FirstOrDefault(x => x.HasTag(PLAYER_LEADERBOARD_PLACE) && x.IsControlledBy(_game.Player.Id));
 					var finalPlacement = hero?.GetTag(PLAYER_LEADERBOARD_PLACE) ?? 0;
