@@ -152,6 +152,17 @@ namespace Hearthstone_Deck_Tracker.Windows
 			}
 		}
 
+		// Show() sizes the scaling origin to the content it had at the time. Call this after swapping
+		// the content of an element that stays visible, otherwise it keeps scaling around the old width.
+		public void Refresh()
+		{
+			if(_animating || !Element.IsVisible)
+				return;
+			Element.UpdateLayout();
+			UpdateScaling();
+			UpdatePosition();
+		}
+
 		public void Show()
 		{
 			if(Element.Visibility == Visible)
@@ -192,12 +203,15 @@ namespace Hearthstone_Deck_Tracker.Windows
 			sb.Begin();
 		}
 
-		public void Hide()
+		// keep the parameterless overload, plugins are compiled against it
+		public void Hide() => Hide(null);
+
+		public void Hide(AnimationType? animation)
 		{
 			if(Element.Visibility == Collapsed)
 				return;
 
-			var sb = CreateStoryboard(ExitAnimation, GetHiddenOffset(), Fade ? 0 : null);
+			var sb = CreateStoryboard(animation ?? ExitAnimation, GetHiddenOffset(), Fade ? 0 : null);
 			if(sb == null)
 				return;
 			sb.Completed += (obj, args) =>

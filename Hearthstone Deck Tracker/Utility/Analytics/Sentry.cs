@@ -15,6 +15,8 @@ using Hearthstone_Deck_Tracker.Plugins;
 using Hearthstone_Deck_Tracker.Utility.Extensions;
 using Hearthstone_Deck_Tracker.Utility.Logging;
 using Hearthstone_Deck_Tracker.Utility.RemoteData;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using SharpRaven;
 using SharpRaven.Data;
 
@@ -32,6 +34,8 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 		static Sentry()
 		{
 			Client.Release = Helper.GetCurrentVersion().ToVersionString(true);
+			Client.Compression = true;
+			Client.Timeout = TimeSpan.FromSeconds(15);
 			Log.OnLogLine += AddHDTLogLine;
 		}
 
@@ -68,7 +72,7 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 		}
 
 #if(SQUIRREL)
-		private const int MaxBobsBuddyEventsPerGame = 20;
+		private const int MaxBobsBuddyEventsPerGame = 5;
 		private const int MaxBobsBuddyExceptionsPerGame = 5;
 		private const int MaxHDTToolsEvents = 10;
 		private static int BobsBuddyEventsSent;
@@ -104,6 +108,7 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 				Iterations = output.simulationCount,
 				ExitCondition = output.myExitCondition.ToString(),
 				Input = testInput,
+				UnitTestableVersion = testInput.UnitTestableVersion,
 				Output = output,
 				Log = ReverseAndClone(_recentHDTLog),
 				Region = region,
@@ -184,6 +189,8 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 		private static void SendQueuedBobsBuddyEvents(string? shortId, string path, Func<SentryEvent, SentryEvent> recode)
 		{
 			var sent = 0;
+			var maxExtraBytes = 0;
+			var totalExtraBytes = 0;
 			var captureFailed = 0;
 			while(BobsBuddyEvents.Count > 0)
 			{
@@ -196,14 +203,20 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 				var e = BobsBuddyEvents.Dequeue();
 				((BobsBuddyData)e.Extra).ShortId = shortId;
 
-				var eventId = Client.Capture(recode(e));
+				var toCapture = WithSerializableExtra(recode(e));
+				var extraSize = GetExtraSize(toCapture);
+				maxExtraBytes = Math.Max(maxExtraBytes, extraSize);
+				totalExtraBytes += extraSize;
+				StripIfTooLarge(toCapture, extraSize);
+
+				var eventId = Client.Capture(toCapture);
 				if(eventId != null)
 					sent++;
 				else
 					captureFailed++;
 				BobsBuddyEventsSent++;
 			}
-			Influx.OnBobsBuddySentryEventsSent(path, sent, captureFailed);
+			Influx.OnBobsBuddySentryEventsSent(path, sent, captureFailed, maxExtraBytes, totalExtraBytes);
 		}
 
 		private static SentryEvent RecodeIfBothSidesEmpty(SentryEvent e)
@@ -221,6 +234,71 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 
 		private static SentryEvent RecodeAsStateCompleteFalse(SentryEvent e) =>
 			Recode(e, $"BobsBuddy {BobsBuddyUtils.VersionString}: Incorrect Terminal Case: StateCompleteFalse");
+
+		// Structural guard against back-references that would otherwise re-expand large object
+		// graphs into a report (see the CardEntity.simulator incident, which alone blew a single
+		// BobsBuddy event up to ~17MB). Anything nested deeper than this is replaced with a marker.
+		private const int MaxExtraDepth = 10;
+
+		// Backstop for events that are still too big after depth pruning (e.g. a large flat list).
+		private const int MaxExtraSizeBytes = 500_000;
+
+		private static void PruneDeepTokens(JToken token, int depth)
+		{
+			if(depth >= MaxExtraDepth)
+				return;
+			switch(token)
+			{
+				case JObject obj:
+					foreach(var property in obj.Properties().ToList())
+					{
+						if(depth + 1 >= MaxExtraDepth && property.Value is JContainer)
+							property.Value = new JValue("[truncated: max depth exceeded]");
+						else
+							PruneDeepTokens(property.Value, depth + 1);
+					}
+					break;
+				case JArray arr:
+					for(var i = 0; i < arr.Count; i++)
+					{
+						if(depth + 1 >= MaxExtraDepth && arr[i] is JContainer)
+							arr[i] = new JValue("[truncated: max depth exceeded]");
+						else
+							PruneDeepTokens(arr[i], depth + 1);
+					}
+					break;
+			}
+		}
+
+		private static int GetExtraSize(SentryEvent e)
+			=> (e.Extra as JObject)?.ToString(Formatting.None).Length ?? 0;
+
+		private static void StripIfTooLarge(SentryEvent e, int extraSize)
+		{
+			if(!(e.Extra is JObject extra))
+				return;
+			if(extraSize <= MaxExtraSizeBytes)
+				return;
+			extra["Input"] = "[stripped: payload exceeded size limit]";
+			extra["Output"] = "[stripped: payload exceeded size limit]";
+			e.Tags["stripped_for_size"] = "true";
+		}
+
+		private static SentryEvent WithSerializableExtra(SentryEvent e)
+		{
+			if(e.Extra == null)
+				return e;
+			// BobsBuddy entities contain reference cycles (Enchantment.AttachedTo), which make SharpRaven's serialization throw
+			var serializer = JsonSerializer.Create(new JsonSerializerSettings
+			{
+				ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+				Error = (_, args) => args.ErrorContext.Handled = true,
+			});
+			var extra = JObject.FromObject(e.Extra, serializer);
+			PruneDeepTokens(extra, 0);
+			e.Extra = extra;
+			return e;
+		}
 
 		private static SentryEvent Recode(SentryEvent e, string message) =>
 			new SentryEvent(new SentryMessage(message))
@@ -247,6 +325,7 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 				Turn = turn,
 				ThreadCount = BobsBuddyInvoker.ThreadCount,
 				Input = input,
+				UnitTestableVersion = input.UnitTestableVersion,
 				Log = ReverseAndClone(_recentHDTLog)
 			};
 
@@ -374,7 +453,8 @@ namespace Hearthstone_Deck_Tracker.Utility.Analytics
 			public int Iterations { get; set; }
 			public string? ExitCondition { get; set; }
 			public Input? Input { get; set; }
-			public string? UnitTestableVersion => Input?.UnitTestableVersion;
+			// Captured explicitly (rather than derived from Input) so it survives StripIfTooLarge
+			public string? UnitTestableVersion { get; set; }
 			public Output? Output { get; set; }
 
 			public Region Region { get; set; }

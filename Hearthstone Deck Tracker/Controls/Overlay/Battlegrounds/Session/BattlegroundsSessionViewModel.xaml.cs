@@ -42,10 +42,18 @@ public class BattlegroundsSessionViewModel : ViewModel
 		if(Core.Game.Spectator)
 			return;
 
-		var currentRating = Core.Game.CurrentGameStats?.BattlegroundsRatingAfter;
-		BgRatingCurrent = $"{currentRating:N0}";
+		UpdateCurrentRating(Core.Game.CurrentGameStats?.BattlegroundsRatingAfter ?? 0, Core.Game.CurrentBattlegroundsRating);
 
 		UpdateLatestGames();
+	}
+
+	// the post-game rating is 0 when we could not read it from the client, so we fall back to the rating we already
+	// have rather than claiming the player dropped to 0
+	internal void UpdateCurrentRating(int ratingAfter, int? clientRating)
+	{
+		var currentRating = ratingAfter > 0 ? ratingAfter : clientRating;
+		if(currentRating > 0)
+			BgRatingCurrent = $"{currentRating:N0}";
 	}
 
 	private readonly SemaphoreSlim _updateCompStatsSemaphore = new SemaphoreSlim(1, 1);
@@ -381,7 +389,7 @@ public class BattlegroundsSessionViewModel : ViewModel
 					sessionStartTime = gStartTime;
 			}
 			previousGameEndTime = DateTime.Parse(g.EndTime);
-			previousGameRatingAfter = g.RatingAfter;
+			previousGameRatingAfter = g.RatingAfterOrCarriedForward;
 		};
 
 		var sessionGames = sessionStartTime == null
@@ -395,7 +403,7 @@ public class BattlegroundsSessionViewModel : ViewModel
 			// Check for MMR reset on last game
 			var ratingResetAfterLastGame = false;
 			if(Core.Game.BattlegroundsRatingInfo?.Rating is int currentMMR)
-				ratingResetAfterLastGame = IsRatingReset(lastGame.RatingAfter, currentMMR);
+				ratingResetAfterLastGame = IsRatingReset(lastGame.RatingAfterOrCarriedForward, currentMMR);
 
 			var ts = DateTime.Now - DateTime.Parse(lastGame.EndTime);
 

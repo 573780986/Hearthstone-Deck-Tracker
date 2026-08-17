@@ -1,3 +1,24 @@
+## **Release v1.55.11 - 2026-08-15**
+**Hearthstone**:
+- Fixed the secret tracker showing the wrong secrets when The Origin Stone cast a secret from a Discover.
+
+**Battlegrounds**:
+- Added Activate and Lockbox to the filterable mechanics in the Minion Browser.
+- Fixed the Minion Browser mechanic filters finding fewer minions when the tracker is not set to English.
+
+**Plugins**:
+- Fixed a plugin compatibility issue.
+
+## **Release v1.55.10 - 2026-08-14**
+**Battlegrounds**:
+- Fixed an issue with the instrumentation we use to fix incorrect combat odds.
+
+## **Release v1.55.9 - 2026-08-14**
+**Battlegrounds**:
+- Updated the list of Trinkets that cause Tavern Tier 7 to appear.
+- Removed the distracting Bob's Buddy animation when hovering the leaderboard.
+- Fixed certain Battlegrounds overlay settings not taking effect immediately.
+
 ## **Release v1.55.8 - 2026-08-14**
 **Battlegrounds**:
 - Fixed a number of incorrect combat odds.
